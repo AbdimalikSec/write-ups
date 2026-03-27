@@ -1,0 +1,2 @@
+ medium active directory machine 
+ 
