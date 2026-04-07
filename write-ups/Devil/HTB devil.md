@@ -236,5 +236,5 @@ No exploit needed — just upload and execute.
 
 ---
 
-_Stager — PNPT Candidate_ _FashilHack — Simulating Attacks, Securing Businesses._
+_Stager — FashilHack — Simulating Attacks, Securing Businesses._
 

@@ -232,4 +232,4 @@ backup.sh writable + cron as root → replace with reverse shell → root
 
 ---
 
-_Stager — PNPT Candidate_ _FashilHack — Simulating Attacks, Securing Businesses._
+_Stager — FashilHack — Simulating Attacks, Securing Businesses._
