@@ -36,7 +36,8 @@ nmap -p- -A -T4 172.20.10.5
 |8080|HTTP — PHP info page|
 
 Three things worth attacking: port 80 web app, port 8080 web app, and NFS on 2049. I started with the web apps and NFS in parallel.
-![[stager/writeups/Dev/images/nmap.png]]
+
+![Nmap Results](./images/nmap.png)
 
 ---
 
@@ -50,7 +51,8 @@ gobuster dir -u http://172.20.10.5:8080 -w big.txt -x php,html,txt
 Port 80 gave me `/app`, `/src`, `/public` — Bolt CMS directories. The `/app` directory was open to browse without any login.
 
 Port 8080 gave me `/dev` — Boltwire CMS running inside.
-![[stager/writeups/Dev/images/dirbuster.png]]
+![Nmap Results](./images/dirbuster.png)
+
 
 ---
 
@@ -102,7 +104,8 @@ ls
 ```
 
 One file: a password-protected zip.
-![[stager/writeups/Dev/images/nfs shared found mounted.png]]
+![Nmap Results](./images/nfs%20shared%20found%20mounted.png)
+
 
 ---
 
@@ -120,7 +123,8 @@ Output:
 PASSWORD FOUND!!!!: pw == java101
 ```
 
-![[stager/writeups/Dev/images/crack a zip file after we found i in rpcclient port 111.png]]
+![Nmap Results](./images/crack%20a%20zip%20file%20after%20we%20found%20i%20in%20rpcclient%20port%20111.png)
+
 
 ---
 
@@ -142,7 +146,7 @@ cat id_rsa
 ```
 
 Two useful things: an SSH private key and a note signed by `jp`. I assumed `jp` was the username. That assumption was wrong — or rather, incomplete.
-![[stager/writeups/Dev/images/rsa found.png]]
+![rsa found](./images/rsa%20found.png)
 
 ---
 
