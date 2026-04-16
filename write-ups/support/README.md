@@ -448,7 +448,7 @@ root.txt: 6f7cc60a6e13b738c292ec507178fbe0
 
 ## Proof
 
-![[stager/writeups/write-ups/cctv/finished.png]]
+![][images/finished.png]
 
 **Rank: #10343 | Pwned: 15 Apr 2026 | Machine State: Retired**
 

