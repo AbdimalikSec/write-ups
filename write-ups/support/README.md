@@ -77,7 +77,7 @@ The share list revealed a non-standard share: `support-tools`. Everything else (
 smbclient //10.129.27.67/support-tools
 ```
 
-![[smb anonymous access.png]]
+![[./smb anonymous access.png]]
 
 Anonymous read access worked. The share contained several portable utilities and one file that stands out immediately:
 
