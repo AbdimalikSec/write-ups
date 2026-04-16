@@ -46,7 +46,6 @@ This confirms it's a **Domain Controller**.
 ## Step 2 — SMB Enumeration (Anonymous Access)
 
 First thing in AD environments → check SMB.
-
 ### smbmap
 
 ```bash
@@ -117,12 +116,9 @@ If you see:
 
 You now have a **valid domain user**
 
----
 ## Step 5 — Kerberoasting (Main Attack)
 
 Now comes the core of this box.
-
----
 ### 🧠 What is Kerberoasting?
 - You authenticate → get **TGT**
 - Request **TGS** for a service account
@@ -143,7 +139,6 @@ If successful, you get a hash like:
 $krb5tgs$...
 ```
 
----
 ### ⚠️ If You Get Clock Skew Error
 
 Fix time sync:
@@ -151,9 +146,7 @@ Fix time sync:
 sudo apt install ntpsec-ntpdate -y
 sudo ntpdate 10.10.10.1
 ```
----
 ## Step 6 — Crack the Hash
-
 Use Hashcat:
 
 ```bash
@@ -290,7 +283,6 @@ looking for if there is fileshares with anonym login
 - get Group.xml (and it will isnstall on your kali)
 - crack it with using `gpp-decrypt <hash>`
 - we get a username and hash of service which grants TGS
-- 
 
 to crack a hash of a group use 
 - gpp-decrypt (hash)
