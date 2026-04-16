@@ -11,7 +11,6 @@ Cap is an easy Linux box on HackTheBox. It looks simple on the surface — a web
 This box taught me that.
 
 ---
-
 ## Target
 
 ```

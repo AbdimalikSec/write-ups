@@ -92,7 +92,6 @@ Cracked. Got plaintext password for `l.clark`.
 ![Hash Cracked](./images/hashcat.png)
 
 ---
-
 ## Step 5 — User Enumeration with NetExec
 
 With valid credentials pulled all domain users:
